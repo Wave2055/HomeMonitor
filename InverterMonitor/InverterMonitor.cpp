@@ -7,6 +7,9 @@
 #include <chrono>
 #include <signal.h>
 #include <csignal>
+#include <map>
+#include <string>
+#include <fstream>
 
 /**
  * @brief Sets up the serial communication on the specified port.
@@ -17,7 +20,7 @@
  * @param port The name of the serial port to open (e.g., "/dev/ttyUSB0").
  * @return The file descriptor for the serial port on success, or -1 on failure.
  */
-int setupSerial(const char* port) {
+int setupSerial(const char* port, speed_t baudRate) {
     // Open the serial port with read and write access
     int fd = open(port, O_RDWR | O_NOCTTY);
     if (fd < 0) {
@@ -37,8 +40,8 @@ int setupSerial(const char* port) {
     }
 
     // Set the baud rate to 9600 for both input and output
-    cfsetospeed(&tty, B9600);
-    cfsetispeed(&tty, B9600);
+    cfsetospeed(&tty, baudRate);
+    cfsetispeed(&tty, baudRate);
 
     // Configure data format: 8 data bits, no parity, 1 stop bit
     tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;     // 8 data bits
@@ -126,7 +129,7 @@ void signalHandler(int signal) {
 
 // Function to read key-value pairs from the .env file
 std::map<std::string, std::string> readEnvFile() {
-    string filename = ".env"
+    std::string filename = ".env";
     std::map<std::string, std::string> config;
     std::ifstream file(filename);
 
@@ -161,7 +164,7 @@ std::map<std::string, std::string> readEnvFile() {
  */
 int main() {
     // Load configuration from .env file
-    std::map<std::string, std::string> config = readEnvFile(".env");
+    std::map<std::string, std::string> config = readEnvFile();
 
     // Check if required variables are set
     if (config.find("PORT") == config.end()) {
@@ -176,10 +179,10 @@ int main() {
 
     // Parse port and baud rate
     std::string port = config["PORT"];
-    int baudRate = std::stoi(config["BAUD_RATE"]);
+    speed_t baudRate =(speed_t) std::stoi(config["BAUD_RATE"]);
 
     // Set up the serial port
-    int serial_fd = setupSerial(port, baudRate);
+    int serial_fd = setupSerial(port.c_str(), baudRate);
     if (serial_fd < 0) {
         return 1;
     }
