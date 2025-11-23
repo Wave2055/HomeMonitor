@@ -1,4 +1,3 @@
-
 #include <iostream>
 #include <fcntl.h>
 #include <termios.h>
@@ -6,41 +5,67 @@
 #include <cstring>
 #include <thread>
 #include <chrono>
+#include <signal.h>
+#include <csignal>
 
-// Configure the serial port
+/**
+ * @brief Sets up the serial communication on the specified port.
+ *
+ * This function opens the serial port, configures the baud rate, data format, and
+ * other communication parameters using the termios structure.
+ *
+ * @param port The name of the serial port to open (e.g., "/dev/ttyUSB0").
+ * @return The file descriptor for the serial port on success, or -1 on failure.
+ */
 int setupSerial(const char* port) {
-    int fd = open(port, O_RDWR | O_NOCTTY | O_SYNC);
+    // Open the serial port with read and write access
+    int fd = open(port, O_RDWR | O_NOCTTY);
     if (fd < 0) {
-        std::cerr << "Error opening serial port\n";
+        std::cerr << "Error opening serial port: " << port << std::endl;
         return -1;
     }
 
+    // Initialize the termios structure to zero
     struct termios tty;
-    memset(&tty, 0, sizeof tty);
+    memset(&tty, 0, sizeof(tty));
+
+    // Get the current serial port settings
     if (tcgetattr(fd, &tty) != 0) {
-        std::cerr << "Error from tcgetattr\n";
+        std::cerr << "Error from tcgetattr" << std::endl;
         close(fd);
         return -1;
     }
 
+    // Set the baud rate to 9600 for both input and output
     cfsetospeed(&tty, B9600);
     cfsetispeed(&tty, B9600);
 
-    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8-bit chars
-    tty.c_iflag &= ~IGNBRK;
+    // Configure data format: 8 data bits, no parity, 1 stop bit
+    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;     // 8 data bits
+    tty.c_iflag &= ~IGNBRK;                        // Ignore break condition
+
+    // Disable local and output processing
     tty.c_lflag = 0;
     tty.c_oflag = 0;
-    tty.c_cc[VMIN]  = 0;   // non-blocking read
-    tty.c_cc[VTIME] = 10;  // 1-second timeout (10 deciseconds)
 
+    // Set non-blocking read with a timeout of 1 second (10 deciseconds)
+    tty.c_cc[VMIN]  = 0;                           // Non-blocking read
+    tty.c_cc[VTIME] = 10;                          // 1-second timeout
+
+    // Disable software flow control
     tty.c_iflag &= ~(IXON | IXOFF | IXANY);
-    tty.c_cflag |= (CLOCAL | CREAD);
-    tty.c_cflag &= ~(PARENB | PARODD);
-    tty.c_cflag &= ~CSTOPB;
-    tty.c_cflag &= ~CRTSCTS;
 
+    // Enable local connection and receive
+    tty.c_cflag |= (CLOCAL | CREAD);
+
+    // Disable hardware flow control, parity, and extra stop bits
+    tty.c_cflag &= ~(PARENB | PARODD);             // No parity
+    tty.c_cflag &= ~CSTOPB;                        // 1 stop bit
+    tty.c_cflag &= ~CRTSCTS;                       // No hardware flow control
+
+    // Apply the new configuration to the serial port
     if (tcsetattr(fd, TCSANOW, &tty) != 0) {
-        std::cerr << "Error from tcsetattr\n";
+        std::cerr << "Error setting serial port attributes" << std::endl;
         close(fd);
         return -1;
     }
@@ -48,36 +73,126 @@ int setupSerial(const char* port) {
     return fd;
 }
 
-// Function to query inverter and print response
+/**
+ * @brief Sends a command to the inverter and reads the response.
+ *
+ * This function writes a predefined command to the serial port and then reads
+ * the response from the inverter.
+ *
+ * @param fd The file descriptor for the serial port.
+ */
 void readInverter(int fd) {
-    char buf[256];
+    const char* command = "*STATUS?";  // The command to send to the inverter
+    char buffer[256];                 // Buffer to store the response
+    int bytes_read;
 
-    // Read-only status command
-    const char* query = "*STATUS?\r";  // Example: Phocos ASCII read-only command
-    write(fd, query, strlen(query));
+    // Write the command to the serial port
+    if (write(fd, command, strlen(command)) < 0) {
+        std::cerr << "Failed to write command to serial port" << std::endl;
+        return;
+    }
 
-    // Read inverter response
-    int n = read(fd, buf, sizeof(buf)-1);
-    if (n > 0) {
-        buf[n] = '\0';
-        std::cout << "Inverter data: " << buf << "\n";
-    } else {
-        std::cerr << "No response or timeout\n";
+    // Wait a moment to allow the inverter to process the command
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Read the response from the inverter
+    bytes_read = read(fd, buffer, sizeof(buffer) - 1);
+    if (bytes_read < 0) {
+        std::cerr << "Error reading from serial port" << std::endl;
+        return;
+    }
+
+    // Null-terminate the buffer to make it a valid string
+    buffer[bytes_read] = '\0';
+
+    // Print the response from the inverter
+    std::cout << "Inverter Response: " << buffer << std::endl;
+}
+
+/**
+ * @brief Signal handler for graceful program termination.
+ *
+ * This function is called when the user sends a termination signal (e.g., Ctrl+C).
+ * It prints a message and exits the program.
+ *
+ * @param signal The signal number received.
+ */
+void signalHandler(int signal) {
+    if (signal == SIGINT) {
+        std::cout << "\nCaught Ctrl+C. Exiting gracefully..." << std::endl;
+        exit(0);
     }
 }
 
-int main() {
-    const char* port = "/dev/ttyUSB0";  // Change to your RS232 port
-    int fd = setupSerial(port);
-    if (fd < 0) return 1;
+// Function to read key-value pairs from the .env file
+std::map<std::string, std::string> readEnvFile() {
+    string filename = ".env"
+    std::map<std::string, std::string> config;
+    std::ifstream file(filename);
 
-    std::cout << "Starting Phocos inverter monitoring (read-only)...\n";
-
-    while (true) {
-        readInverter(fd);
-        std::this_thread::sleep_for(std::chrono::seconds(1));  // poll every 1 second
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open .env file: " << filename << std::endl;
+        return config;
     }
 
-    close(fd);
+    std::string line;
+    while (std::getline(file, line)) {
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == '#') continue;
+
+        size_t equalsPos = line.find('=');
+        if (equalsPos == std::string::npos) continue;  // Skip invalid lines
+
+        std::string key = line.substr(0, equalsPos);
+        std::string value = line.substr(equalsPos + 1);
+
+        config[key] = value;
+    }
+
+    file.close();
+    return config;
+}
+
+/**
+ * @brief Main function that runs the inverter monitor.
+ *
+ * This function sets up the serial port, installs the signal handler, and runs
+ * a loop that continuously sends commands and reads responses from the inverter.
+ */
+int main() {
+    // Load configuration from .env file
+    std::map<std::string, std::string> config = readEnvFile(".env");
+
+    // Check if required variables are set
+    if (config.find("PORT") == config.end()) {
+        std::cerr << "Error: PORT not defined in .env" << std::endl;
+        return 1;
+    }
+
+    if (config.find("BAUD_RATE") == config.end()) {
+        std::cerr << "Error: BAUD_RATE not defined in .env" << std::endl;
+        return 1;
+    }
+
+    // Parse port and baud rate
+    std::string port = config["PORT"];
+    int baudRate = std::stoi(config["BAUD_RATE"]);
+
+    // Set up the serial port
+    int serial_fd = setupSerial(port, baudRate);
+    if (serial_fd < 0) {
+        return 1;
+    }
+
+    // Set up signal handler
+    signal(SIGINT, signalHandler);
+
+    // Main loop
+    while (true) {
+        readInverter(serial_fd);
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+
+    close(serial_fd);
     return 0;
 }
